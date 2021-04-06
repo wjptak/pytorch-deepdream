@@ -71,13 +71,12 @@ def pytorch_input_adapter(img, device):
 
 
 def pytorch_output_adapter(tensor):
-    # todo: first detach, more optimal?
     # Push to CPU, detach from the computational graph, convert from (1, 3, H, W) into (H, W, 3)
     return np.moveaxis(tensor.to('cpu').detach().numpy()[0], 0, 2)
 
 
 def build_image_name(config):
-    input_name = 'rand_noise' if config['use_noise'] else config['input'].split('.')[0]
+    input_name = 'rand_noise' if config['use_noise'] else config['input_name'].rsplit('.', 1)[0]
     layers = '_'.join(config['layers_to_use'])
     # Looks awful but makes the creation process transparent for other creators
     img_name = f'{input_name}_width_{config["img_width"]}_model_{config["model_name"]}_{config["pretrained_weights"]}_{layers}_pyrsize_{config["pyramid_size"]}_pyrratio_{config["pyramid_ratio"]}_iter_{config["num_gradient_ascent_iterations"]}_lr_{config["lr"]}_shift_{config["spatial_shift_size"]}_smooth_{config["smoothing_coefficient"]}.jpg'
@@ -141,19 +140,25 @@ def fetch_and_prepare_model(model_type, pretrained_weights, device):
 # Didn't want to expose these to the outer API - too much clutter, feel free to tweak params here
 def transform_frame(config, frame):
     h, w = frame.shape[:2]
+    ref_fps = 30  # referent fps, the transformation settings are calibrated for this one
+
     if config['frame_transform'].lower() == TRANSFORMS.ZOOM.name.lower():
-        scale = 1.05  # Use this param to (un)zoom
+        scale = 1.04 * (ref_fps / config['fps'])  # Use this param to (un)zoom
         rotation_matrix = cv.getRotationMatrix2D((w / 2, h / 2), 0, scale)
         frame = cv.warpAffine(frame, rotation_matrix, (w, h))
+
     elif config['frame_transform'].lower() == TRANSFORMS.ZOOM_ROTATE.name.lower():
-        deg = 3  # Adjust rotation speed (in [deg/frame])
-        scale = 1.1  # Use this to (un)zoom while rotating around image center
+        # Arbitrary heuristic keep the degree at 3 degrees/second and scale 1.04/second
+        deg = 1.5 * (ref_fps / config['fps'])  # Adjust rotation speed (in [deg/frame])
+        scale = 1.04 * (ref_fps / config['fps'])  # Use this to (un)zoom while rotating around image center
         rotation_matrix = cv.getRotationMatrix2D((w / 2, h / 2), deg, scale)
         frame = cv.warpAffine(frame, rotation_matrix, (w, h))
+
     elif config['frame_transform'].lower() == TRANSFORMS.TRANSLATE.name.lower():
-        tx, ty = [5, 5]
+        tx, ty = [2 * (ref_fps / config['fps']), 2 * (ref_fps / config['fps'])]
         translation_matrix = np.asarray([[1., 0., tx], [0., 1., ty]])
         frame = cv.warpAffine(frame, translation_matrix, (w, h))
+
     else:
         raise Exception('Transformation not yet supported.')
 
@@ -253,7 +258,7 @@ def create_image_pyramid(img, num_octaves, octave_scale):
 
 
 def print_deep_dream_video_header(config):
-    print(f'Creating a DeepDream video from {config["input"]}, via {config["model_name"]} model.')
+    print(f'Creating a DeepDream video from {config["input_name"]}, via {config["model_name"]} model.')
     print(f'Using pretrained weights = {config["pretrained_weights"]}')
     print(f'Using model layers = {config["layers_to_use"]}')
     print(f'Using lending coefficient = {config["blend"]}.')
@@ -263,10 +268,21 @@ def print_deep_dream_video_header(config):
 
 
 def print_ouroboros_video_header(config):
-    print(f'Creating a {config["ouroboros_length"]}-frame Ouroboros video from {config["input"]}, via {config["model_name"]} model.')
+    print(f'Creating a {config["ouroboros_length"]}-frame Ouroboros video from {config["input_name"]}, via {config["model_name"]} model.')
     print(f'Using {config["frame_transform"]} for the frame transform')
     print(f'Using pretrained weights = {config["pretrained_weights"]}')
     print(f'Using model layers = {config["layers_to_use"]}')
     print(f'Video output width = {config["img_width"]}')
     print(f'fps = {config["fps"]}')
     print('*' * 50, '\n')
+
+
+def parse_input_file(input):
+    # Handle abs/rel paths
+    if os.path.exists(input):
+        return input
+    # If passed only a name and it doesn't exist in the current working dir assume it's in input data dir
+    elif os.path.exists(os.path.join(INPUT_DATA_PATH, input)):
+        return os.path.join(INPUT_DATA_PATH, input)
+    else:
+        raise Exception(f'Input path {input} is not valid.')

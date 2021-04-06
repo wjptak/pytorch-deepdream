@@ -8,6 +8,7 @@
 import os
 import argparse
 import shutil
+import time
 
 
 import numpy as np
@@ -45,6 +46,7 @@ def gradient_ascent(config, model, input_tensor, layer_ids_to_use, iteration):
     grad = input_tensor.grad.data
 
     # Applies 3 Gaussian kernels and thus "blurs" or smoothens the gradients and gives visually more pleasing results
+    # sigma is calculated using an arbitrary heuristic feel free to experiment
     sigma = ((iteration + 1) / config['num_gradient_ascent_iterations']) * 2.0 + config['smoothing_coefficient']
     smooth_grad = utils.CascadeGaussianSmoothing(kernel_size=9, sigma=sigma)(grad)  # "magic number" 9 just works well
 
@@ -73,7 +75,7 @@ def deep_dream_static_image(config, img):
         return
 
     if img is None:  # load either the provided image or start from a pure noise image
-        img_path = os.path.join(INPUT_DATA_PATH, config['input'])
+        img_path = utils.parse_input_file(config['input'])
         # load a numpy, [0, 1] range, channel-last, RGB image
         img = utils.load_image(img_path, target_shape=config['img_width'])
         if config['use_noise']:
@@ -110,12 +112,13 @@ def deep_dream_video_ouroboros(config):
     Name etymology for nerds: https://en.wikipedia.org/wiki/Ouroboros
 
     """
-    assert any([config['input'].lower().endswith(img_ext) for img_ext in SUPPORTED_IMAGE_FORMATS]), \
-        f'Expected an image, but got {config["input"]}. Supported image formats {SUPPORTED_IMAGE_FORMATS}.'
+    ts = time.time()
+    assert any([config['input_name'].lower().endswith(img_ext) for img_ext in SUPPORTED_IMAGE_FORMATS]), \
+        f'Expected an image, but got {config["input_name"]}. Supported image formats {SUPPORTED_IMAGE_FORMATS}.'
 
     utils.print_ouroboros_video_header(config)  # print some ouroboros-related metadata to the console
 
-    img_path = os.path.join(INPUT_DATA_PATH, config['input'])
+    img_path = utils.parse_input_file(config['input'])
     # load numpy, [0, 1] range, channel-last, RGB image
     # use_noise and consequently None value, will cause it to initialize the frame with uniform, [0, 1] range, noise
     frame = None if config['use_noise'] else utils.load_image(img_path, target_shape=config['img_width'])
@@ -132,10 +135,11 @@ def deep_dream_video_ouroboros(config):
         frame = utils.transform_frame(config, frame)
 
     video_utils.create_video_from_intermediate_results(config)
+    print(f'time elapsed = {time.time()-ts} seconds.')
 
 
 def deep_dream_video(config):
-    video_path = os.path.join(INPUT_DATA_PATH, config['input'])
+    video_path = utils.parse_input_file(config['input'])
     tmp_input_dir = os.path.join(OUT_VIDEOS_PATH, 'tmp_input')
     tmp_output_dir = os.path.join(OUT_VIDEOS_PATH, 'tmp_out')
     config['dump_dir'] = tmp_output_dir
@@ -216,14 +220,14 @@ if __name__ == "__main__":
         config[arg] = getattr(args, arg)
     config['dump_dir'] = OUT_VIDEOS_PATH if config['create_ouroboros'] else OUT_IMAGES_PATH
     config['dump_dir'] = os.path.join(config['dump_dir'], f'{config["model_name"]}_{config["pretrained_weights"]}')
-    config['input'] = os.path.basename(config['input'])  # handle absolute and relative paths
+    config['input_name'] = os.path.basename(config['input'])
 
     # Create Ouroboros video (feeding neural network's output to it's input)
     if config['create_ouroboros']:
         deep_dream_video_ouroboros(config)
 
     # Create a blended DeepDream video
-    elif any([config['input'].endswith(video_ext) for video_ext in SUPPORTED_VIDEO_FORMATS]):  # only support mp4 atm
+    elif any([config['input_name'].lower().endswith(video_ext) for video_ext in SUPPORTED_VIDEO_FORMATS]):  # only support mp4 atm
         deep_dream_video(config)
 
     else:  # Create a static DeepDream image
